@@ -12,6 +12,7 @@ import { ref, onValue } from "firebase/database";
 import { db } from "../firebase";
 import SectionCard from "../components/SectionCard";
 import { useTheme } from "../context/ThemeContext";
+import { Audio } from "expo-av";
 
 export default function OverviewScreen() {
   const { theme } = useTheme();
@@ -19,54 +20,95 @@ export default function OverviewScreen() {
 
   const [deviceList, setDeviceList] = useState<string[]>([]);
   const [deviceData, setDeviceData] = useState<any>({});
+
+  // Track which devices already alerted
   const alertedDevices = useRef<Set<string>>(new Set());
 
+  // Sound reference
+  const soundRef = useRef<Audio.Sound | null>(null);
+
+  // Load sound once
+  const loadSound = async () => {
+    if (soundRef.current) return;
+
+   const { sound } = await Audio.Sound.createAsync(
+  require("../assets/sounds/fire_alarm.mp3")
+
+);
+
+    soundRef.current = sound;
+  };
+
+  // Play alarm sound
+  const playAlarm = async () => {
+    try {
+      await loadSound();
+      await soundRef.current?.setPositionAsync(0);
+      await soundRef.current?.playAsync();
+    } catch (err) {
+      console.log("Sound error:", err);
+    }
+  };
+
+  // Stop alarm sound
+  const stopAlarm = async () => {
+    try {
+      await soundRef.current?.stopAsync();
+    } catch {}
+  };
+
   useEffect(() => {
-    // 🔥 FIXED PATH HERE
     const mainRef = ref(db, "forest_devices");
 
     const unsubscribe = onValue(mainRef, (snapshot) => {
       const allDevices = snapshot.val();
+      if (!allDevices) return;
 
-      if (allDevices) {
-        const deviceKeys = Object.keys(allDevices); // device_01, device_02 etc.
-        setDeviceList(deviceKeys);
-        setDeviceData(allDevices);
+      const deviceKeys = Object.keys(allDevices);
+      setDeviceList(deviceKeys);
+      setDeviceData(allDevices);
 
-        // --------------------------------------------------
-        // 🔥 FIRE + RAIN ALERT CHECK FOR EACH DEVICE /last
-        // --------------------------------------------------
-        deviceKeys.forEach((devKey) => {
-          const d = allDevices[devKey]?.last; // <-- ✔ correct sensor data path
+      deviceKeys.forEach((devKey) => {
+        const d = allDevices[devKey]?.last;
 
-          if (!d) return;
+        if (!d) return;
 
-          const isFire =
-            d.fireDetected === "true" ||
-            d.temperature > 50 ||
-            d.gas > 900;
+        // FIRE detection
+        const isFire =
+          d.fireDetected === "true" ||
+          d.temperature > 50 ||
+          d.gas > 900;
 
-          const isHeavyRain = d.rainAnalog >= 1500 || d.rainPercent >= 70;
+        // RAIN detection
+        const isHeavyRain = d.rainAnalog >= 1500 || d.rainPercent >= 70;
 
-          // Show alert only once
-          if ((isFire || isHeavyRain) && !alertedDevices.current.has(devKey)) {
-            let msg = `${devKey}\n`;
-            if (isFire) msg += "🔥 Fire Danger Detected!\n";
-            if (isHeavyRain) msg += "🌧 Heavy Rain Detected!";
+        // If a fire happens → alert + sound
+        if (isFire && !alertedDevices.current.has(devKey)) {
+          Alert.alert("🔥 FIRE ALERT", `${devKey}\nFire danger detected!`);
+          playAlarm();
+          alertedDevices.current.add(devKey);
+        }
 
-            Alert.alert("⚠ Warning Alert", msg);
-            alertedDevices.current.add(devKey);
-          }
+        // Rain → alert only, no sound
+        if (isHeavyRain && !alertedDevices.current.has(devKey)) {
+          Alert.alert("🌧 HEAVY RAIN ALERT", `${devKey}\nHeavy rain detected.`);
+          alertedDevices.current.add(devKey);
+        }
 
-          // Remove when safe
-          if (!isFire && !isHeavyRain && alertedDevices.current.has(devKey)) {
-            alertedDevices.current.delete(devKey);
-          }
-        });
-      }
+        // Clear alert when safe
+        if (!isFire && !isHeavyRain && alertedDevices.current.has(devKey)) {
+          alertedDevices.current.delete(devKey);
+
+          // Stop alarm sound when fire is gone
+          stopAlarm();
+        }
+      });
     });
 
-    return () => unsubscribe();
+    return () => {
+      unsubscribe();
+      soundRef.current?.unloadAsync();
+    };
   }, []);
 
   const containerStyle = darkMode ? styles.darkContainer : styles.container;
@@ -83,12 +125,11 @@ export default function OverviewScreen() {
 
       <View style={infoCardStyle}>
         <Text style={styles.infoText}>
-          Monitoring all IoT devices in real-time. Alerts will auto-trigger for
-          fire or heavy rain.
+          Monitoring all IoT devices in real-time.
+          Fire alerts include sound. Rain alerts are silent.
         </Text>
       </View>
 
-      {/* DEVICE CARDS */}
       <FlatList
         data={deviceList}
         horizontal
@@ -96,8 +137,7 @@ export default function OverviewScreen() {
         keyExtractor={(item) => item}
         contentContainerStyle={{ paddingVertical: 20, gap: 15 }}
         renderItem={({ item }) => {
-          const data = deviceData[item]?.last; // <-- ✔ FIXED card data path
-
+          const data = deviceData[item]?.last;
           if (!data) return null;
 
           const danger =
