@@ -28,13 +28,12 @@ export default function OverviewScreen() {
   const soundRef = useRef<Audio.Sound | null>(null);
 
   // Load sound once
-  const loadSound = async () => {
+   const loadSound = async () => {
     if (soundRef.current) return;
 
-   const { sound } = await Audio.Sound.createAsync(
-  require("../assets/sounds/fire_alarm.mp3")
-
-);
+    const { sound } = await Audio.Sound.createAsync(
+      require("../../assets/sounds/fire_alarm.mp3")
+    );
 
     soundRef.current = sound;
   };
